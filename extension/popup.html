@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather</title>
+<style>
+:root {
+  --fg: rgba(255,255,255,0.96);
+  --muted: rgba(255,255,255,0.62);
+  --line: rgba(255,255,255,0.14);
+  --chip: rgba(255,255,255,0.14);
+  --chip-active: rgba(255,255,255,0.92);
+  --chip-active-fg: #0a1929;
+  --rain: #87cefa;
+  --warn: #fca5a5;
+  --shadow: 0 1px 3px rgba(0,0,0,0.35);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { width: 380px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  color: var(--fg);
+  text-shadow: var(--shadow);
+  width: 380px;
+  min-height: 540px;
+  position: relative;
+  background: linear-gradient(180deg, #1a2a3e 0%, #2d4a6e 100%);
+  background-size: cover;
+  background-position: center;
+}
+
+body::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.40) 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  padding: 14px 16px 18px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.location-picker {
+  display: flex;
+  gap: 2px;
+  background: var(--chip);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.location-picker button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  text-shadow: var(--shadow);
+}
+
+.location-picker button.active {
+  background: var(--chip-active);
+  color: var(--chip-active-fg);
+  text-shadow: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+}
+
+.refresh {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-size: 16px;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 8px;
+  line-height: 1;
+  opacity: 0.75;
+}
+.refresh:hover { opacity: 1; }
+.refresh.spinning { animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.location-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.current { margin-bottom: 16px; }
+.current .temp {
+  font-size: 64px;
+  font-weight: 200;
+  letter-spacing: -2.5px;
+  line-height: 0.95;
+  font-feature-settings: "tnum";
+}
+.current .condition {
+  font-size: 14px;
+  margin-top: 5px;
+  opacity: 0.92;
+}
+.current .condition .icon { margin-right: 5px; }
+.current .meta {
+  display: flex;
+  gap: 18px;
+  margin-top: 9px;
+  font-size: 13px;
+  font-feature-settings: "tnum";
+}
+.current .meta .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.current .meta .precip { color: var(--rain); }
+.current .meta .precip.zero { opacity: 0.5; color: var(--muted); }
+
+h2 {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  margin-bottom: 7px;
+  margin-top: 14px;
+}
+
+.hourly {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  background: rgba(255,255,255,0.06);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 9px 2px;
+}
+
+.h-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 1px;
+  font-feature-settings: "tnum";
+}
+.h-time { color: var(--muted); font-size: 10px; letter-spacing: 0.3px; }
+.h-temp { font-size: 13px; font-weight: 500; }
+.h-icon { font-size: 14px; line-height: 1; }
+.h-wind { display: flex; align-items: center; justify-content: center; height: 12px; }
+.h-windspeed { color: var(--muted); font-size: 9px; font-feature-settings: "tnum"; line-height: 1; }
+.h-precip { color: var(--rain); font-size: 10px; }
+.h-precip.zero { color: var(--muted); opacity: 0.4; }
+
+.daily { font-size: 13px; font-feature-settings: "tnum"; }
+.d-row {
+  display: grid;
+  grid-template-columns: 46px 22px 1fr 56px 38px;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.d-row:last-child { border-bottom: none; }
+.d-day { font-weight: 500; }
+.d-icon { text-align: center; font-size: 14px; line-height: 1; }
+.d-range { color: var(--muted); }
+.d-range .high { color: var(--fg); font-weight: 500; }
+.d-wind { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.d-windspeed { font-feature-settings: "tnum"; }
+.d-precip { color: var(--rain); text-align: right; font-size: 11px; }
+.d-precip.zero { color: var(--muted); opacity: 0.4; }
+
+.empty, .err {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 50px 0;
+}
+.err { color: var(--warn); }
+
+.wind-arrow {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35));
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="location-picker" id="locationPicker"></div>
+  <button class="refresh" id="refresh" title="Refresh" aria-label="Refresh">↻</button>
+</header>
+
+<div id="content">
+  <div class="empty">Loading…</div>
+</div>
+
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
