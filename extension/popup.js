@@ -1,5 +1,6 @@
-// Chrome extensions (MV3) disallow inline scripts in popups, so the JS lives here.
-// Logic mirrors the web version.
+// Chrome extension popup — logic mirrors web version.
+// Note: localStorage is sandboxed per extension; sizes/source set on the web don't
+// propagate here automatically. Use exported config from web to update defaults.
 
 const LOCATIONS = [
   { id: 'local',      name: 'Local',      full: 'Local',           isLocal: true },
@@ -11,22 +12,19 @@ const LOCATIONS = [
 
 const STATE = {
   active: localStorage.getItem('wx-active') || 'louisville',
+  source: localStorage.getItem('wx-source') || 'noaa',
 };
 
-// ---------- API ----------
 const POINTS_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const LOCAL_COORDS_TTL_MS = 1000 * 60 * 10;
 
 async function ensureCoords(loc) {
   if (!loc.isLocal) return { lat: loc.lat, lon: loc.lon };
-
   const cached = localStorage.getItem('wx-local-coords');
   if (cached) {
     try {
       const c = JSON.parse(cached);
-      if (Date.now() - c.ts < LOCAL_COORDS_TTL_MS) {
-        return { lat: c.lat, lon: c.lon };
-      }
+      if (Date.now() - c.ts < LOCAL_COORDS_TTL_MS) return { lat: c.lat, lon: c.lon };
     } catch (e) {}
   }
   if (!navigator.geolocation) throw new Error('Geolocation not supported');
@@ -41,6 +39,12 @@ async function ensureCoords(loc) {
       { timeout: 12000, maximumAge: LOCAL_COORDS_TTL_MS, enableHighAccuracy: false }
     );
   });
+}
+
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Forecast fetch failed (' + r.status + ')');
+  return r.json();
 }
 
 async function fetchPoints(loc, coords) {
@@ -64,109 +68,146 @@ async function fetchPoints(loc, coords) {
     city: j.properties.relativeLocation?.properties?.city,
     state: j.properties.relativeLocation?.properties?.state,
   };
-  if (!loc.isLocal) {
-    localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data }));
-  }
+  if (!loc.isLocal) localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data }));
   return data;
 }
 
-async function fetchJSON(url) {
+async function fetchNOAA(loc, coords) {
+  const points = await fetchPoints(loc, coords);
+  const [daily, hourly] = await Promise.all([
+    fetchJSON(points.forecast),
+    fetchJSON(points.forecastHourly),
+  ]);
+  return { daily, hourly, city: points.city, state: points.state };
+}
+
+function wmoToShortForecast(code, isDay) {
+  if (code === 0) return isDay ? 'Sunny' : 'Clear';
+  if (code === 1) return isDay ? 'Mostly Sunny' : 'Mostly Clear';
+  if (code === 2) return 'Partly Cloudy';
+  if (code === 3) return 'Cloudy';
+  if (code === 45 || code === 48) return 'Fog';
+  if (code === 51 || code === 53 || code === 55) return 'Drizzle';
+  if (code === 56 || code === 57) return 'Freezing Drizzle';
+  if (code === 61) return 'Light Rain';
+  if (code === 63) return 'Rain';
+  if (code === 65) return 'Heavy Rain';
+  if (code === 66 || code === 67) return 'Freezing Rain';
+  if (code === 71 || code === 73) return 'Snow';
+  if (code === 75) return 'Heavy Snow';
+  if (code === 77) return 'Snow';
+  if (code === 80 || code === 81) return 'Rain Showers';
+  if (code === 82) return 'Heavy Rain Showers';
+  if (code === 85 || code === 86) return 'Snow Showers';
+  if (code === 95) return 'Thunderstorms';
+  if (code === 96 || code === 99) return 'Thunderstorms';
+  return 'Unknown';
+}
+
+function degreesToCompass(deg) {
+  if (deg == null) return null;
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const idx = Math.round((((deg % 360) + 360) % 360) / 22.5) % 16;
+  return dirs[idx];
+}
+
+async function fetchOpenMeteo(loc, coords) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}` +
+    `&hourly=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,precipitation_probability,is_day` +
+    `&daily=temperature_2m_max,temperature_2m_min,weather_code,wind_speed_10m_max,wind_direction_10m_dominant,precipitation_probability_max` +
+    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=8` +
+    `&models=ecmwf_ifs025`;
   const r = await fetch(url);
-  if (!r.ok) throw new Error('Forecast fetch failed (' + r.status + ')');
-  return r.json();
+  if (!r.ok) throw new Error('Open-Meteo fetch failed (' + r.status + ')');
+  const j = await r.json();
+
+  const hourlyPeriods = j.hourly.time.map((t, i) => ({
+    startTime: t,
+    endTime: j.hourly.time[i + 1] || t,
+    temperature: Math.round(j.hourly.temperature_2m[i]),
+    windSpeed: `${Math.round(j.hourly.wind_speed_10m[i])} mph`,
+    windDirection: degreesToCompass(j.hourly.wind_direction_10m[i]),
+    shortForecast: wmoToShortForecast(j.hourly.weather_code[i], j.hourly.is_day[i] === 1),
+    probabilityOfPrecipitation: { value: j.hourly.precipitation_probability[i] ?? 0 },
+    isDaytime: j.hourly.is_day[i] === 1,
+  }));
+
+  const dailyPeriods = [];
+  for (let i = 0; i < j.daily.time.length; i++) {
+    const dateStr = j.daily.time[i];
+    const code = j.daily.weather_code[i];
+    const wspeed = `${Math.round(j.daily.wind_speed_10m_max[i])} mph`;
+    const wdir = degreesToCompass(j.daily.wind_direction_10m_dominant[i]);
+    const pop = j.daily.precipitation_probability_max[i] ?? 0;
+    dailyPeriods.push({
+      startTime: dateStr + 'T07:00:00',
+      isDaytime: true,
+      temperature: Math.round(j.daily.temperature_2m_max[i]),
+      windSpeed: wspeed, windDirection: wdir,
+      shortForecast: wmoToShortForecast(code, true),
+      probabilityOfPrecipitation: { value: pop },
+    });
+    dailyPeriods.push({
+      startTime: dateStr + 'T19:00:00',
+      isDaytime: false,
+      temperature: Math.round(j.daily.temperature_2m_min[i]),
+      windSpeed: wspeed, windDirection: wdir,
+      shortForecast: wmoToShortForecast(code, false),
+      probabilityOfPrecipitation: { value: pop },
+    });
+  }
+
+  return {
+    daily: { properties: { periods: dailyPeriods } },
+    hourly: { properties: { periods: hourlyPeriods } },
+    city: null, state: null,
+  };
 }
 
-// ---------- Custom SVG icons ----------
-function svgSun() {
-  return `<svg class="wx-icon" viewBox="0 0 24 24" width="1em" height="1em">
-    <g stroke="#FFC42D" stroke-width="2" stroke-linecap="round" fill="none">
-      <line x1="12" y1="2.5" x2="12" y2="5"/>
-      <line x1="12" y1="19" x2="12" y2="21.5"/>
-      <line x1="2.5" y1="12" x2="5" y2="12"/>
-      <line x1="19" y1="12" x2="21.5" y2="12"/>
-      <line x1="5.2" y1="5.2" x2="6.9" y2="6.9"/>
-      <line x1="17.1" y1="17.1" x2="18.8" y2="18.8"/>
-      <line x1="5.2" y1="18.8" x2="6.9" y2="17.1"/>
-      <line x1="17.1" y1="6.9" x2="18.8" y2="5.2"/>
-    </g>
-    <circle cx="12" cy="12" r="4.7" fill="#FFC42D"/>
-  </svg>`;
-}
-
-function svgSunSmallCloud() {
-  return `<svg class="wx-icon" viewBox="0 0 24 24" width="1em" height="1em">
-    <g stroke="#FFC42D" stroke-width="1.6" stroke-linecap="round" fill="none">
-      <line x1="8" y1="1.5" x2="8" y2="3.4"/>
-      <line x1="1.5" y1="8" x2="3.4" y2="8"/>
-      <line x1="3.2" y1="3.2" x2="4.4" y2="4.4"/>
-      <line x1="13" y1="3.2" x2="11.8" y2="4.4"/>
-    </g>
-    <circle cx="8" cy="8" r="3.7" fill="#FFC42D"/>
-    <g fill="#ffffff">
-      <circle cx="14" cy="15.5" r="2.8"/>
-      <circle cx="17" cy="14" r="3.4"/>
-      <circle cx="20" cy="15.5" r="2.6"/>
-      <rect x="14" y="15" width="6.5" height="3.5"/>
-    </g>
-  </svg>`;
-}
-
-function svgSunCloud() {
-  return `<svg class="wx-icon" viewBox="0 0 24 24" width="1em" height="1em">
-    <g stroke="#FFC42D" stroke-width="1.4" stroke-linecap="round" fill="none">
-      <line x1="6.5" y1="1.5" x2="6.5" y2="3.2"/>
-      <line x1="1.5" y1="6.5" x2="3.2" y2="6.5"/>
-      <line x1="2.8" y1="2.8" x2="3.9" y2="3.9"/>
-    </g>
-    <circle cx="6.5" cy="6.5" r="3.3" fill="#FFC42D"/>
-    <g fill="#ffffff">
-      <circle cx="9" cy="14.5" r="3.4"/>
-      <circle cx="13" cy="12.5" r="4.2"/>
-      <circle cx="17.5" cy="14.5" r="3.6"/>
-      <rect x="9" y="14.5" width="9" height="4"/>
-    </g>
-  </svg>`;
-}
-
-function svgFog() {
-  return `<svg class="wx-icon" viewBox="0 0 24 24" width="1em" height="1em">
-    <g stroke="rgba(255,255,255,0.92)" stroke-width="2.2" fill="none" stroke-linecap="round">
-      <path d="M3 7 Q 6 5.5, 9 7 T 15 7 T 21 7"/>
-      <path d="M3 12 Q 6 10.5, 9 12 T 15 12 T 21 12"/>
-      <path d="M3 17 Q 6 15.5, 9 17 T 15 17 T 21 17"/>
-    </g>
-  </svg>`;
-}
-
-// ---------- Mapping ----------
-function iconFor(shortForecast, isDay) {
+function iconFor(shortForecast, isDay, precipPct) {
   const s = (shortForecast || '').toLowerCase();
-  if (s.includes('thunder')) return '⛈️';
+  const chance = s.includes('chance');
+  const expected = precipPct != null && precipPct >= 30;
+  if (s.includes('thunder')) {
+    if (expected) return '⛈️';
+    return chance ? (isDay ? '⛅' : '☁️') : '⛈️';
+  }
   if (s.includes('snow') && s.includes('rain')) return '🌨️';
-  if (s.includes('snow') || s.includes('flurr')) return '❄️';
+  if (s.includes('snow') || s.includes('flurr')) {
+    if (expected) return '❄️';
+    return chance ? (isDay ? '⛅' : '☁️') : '❄️';
+  }
   if (s.includes('sleet') || s.includes('ice') || s.includes('freezing')) return '🌧️';
   if (s.includes('rain') || s.includes('shower') || s.includes('drizzle')) {
-    if (s.includes('chance')) return isDay ? svgSunCloud() : '☁️';
-    return '🌧️';
+    if (expected) return '🌧️';
+    return chance ? (isDay ? '⛅' : '☁️') : '🌧️';
   }
-  if (s.includes('fog') || s.includes('mist') || s.includes('haze') || s.includes('smoke')) return svgFog();
-  if (s.includes('partly')) return isDay ? svgSunCloud() : '☁️';
+  if (s.includes('fog') || s.includes('mist') || s.includes('haze') || s.includes('smoke')) return '🌫️';
+  if (s.includes('partly')) return isDay ? '⛅' : '☁️';
   if (s.includes('mostly cloudy')) return '☁️';
   if (s.includes('cloudy') || s.includes('overcast')) return '☁️';
-  if (s.includes('mostly sunny') || s.includes('mostly clear')) return isDay ? svgSunSmallCloud() : '🌙';
-  if (s.includes('sunny') || s.includes('clear') || s.includes('fair')) return isDay ? svgSun() : '🌙';
+  if (s.includes('mostly sunny') || s.includes('mostly clear')) return isDay ? '🌤️' : '🌙';
+  if (s.includes('sunny') || s.includes('clear') || s.includes('fair')) return isDay ? '☀️' : '🌙';
   if (s.includes('wind')) return '💨';
   if (s.includes('hot')) return '🌡️';
   return '·';
 }
 
-function classifyCondition(shortForecast, isDay) {
+function classifyCondition(shortForecast, isDay, precipPct) {
   const s = (shortForecast || '').toLowerCase();
-  if (s.includes('thunder')) return 'thunderstorm';
-  if (s.includes('snow') || s.includes('flurr') || s.includes('sleet') || s.includes('ice')) return 'snow';
+  const chance = s.includes('chance');
+  const expected = precipPct != null && precipPct >= 30;
+  if (s.includes('thunder')) {
+    if (expected) return 'thunderstorm';
+    return chance ? (isDay ? 'partly-cloudy-day' : 'partly-cloudy-night') : 'thunderstorm';
+  }
+  if (s.includes('snow') || s.includes('flurr') || s.includes('sleet') || s.includes('ice')) {
+    if (expected) return 'snow';
+    return chance ? (isDay ? 'partly-cloudy-day' : 'partly-cloudy-night') : 'snow';
+  }
   if (s.includes('rain') || s.includes('shower') || s.includes('drizzle')) {
-    if (s.includes('chance')) return isDay ? 'partly-cloudy-day' : 'partly-cloudy-night';
-    return 'rain';
+    if (expected) return 'rain';
+    return chance ? (isDay ? 'partly-cloudy-day' : 'partly-cloudy-night') : 'rain';
   }
   if (s.includes('fog') || s.includes('mist') || s.includes('haze') || s.includes('smoke')) return 'fog';
   if (s.includes('partly')) return isDay ? 'partly-cloudy-day' : 'partly-cloudy-night';
@@ -205,10 +246,8 @@ const CONDITION_IMAGE = {
 function applyBackground(condition) {
   const grad = CONDITION_GRADIENT[condition] || CONDITION_GRADIENT['cloudy-day'];
   document.body.style.backgroundImage = grad;
-
   const imgUrl = CONDITION_IMAGE[condition];
   if (!imgUrl) return;
-
   const test = new Image();
   test.onload = () => {
     document.body.style.backgroundImage =
@@ -236,15 +275,13 @@ function windStroke(speed) {
   return 4.0;
 }
 
-function windArrow(direction, speed, size) {
+function windArrow(direction, speed) {
   if (!direction) return '';
   const deg = COMPASS_DEG[direction.toUpperCase()];
   if (deg === undefined) return '';
   const rot = (deg + 90) % 360;
-  const w = size || 18;
-  const h = Math.round(w * 0.55);
   const sw = windStroke(speed);
-  return `<svg class="wind-arrow" viewBox="0 0 20 12" width="${w}" height="${h}" style="transform: rotate(${rot}deg);">
+  return `<svg class="wind-arrow" viewBox="0 0 20 12" style="transform: rotate(${rot}deg);" preserveAspectRatio="xMidYMid meet">
     <path d="M3 6 H14 M11 3 L14 6 L11 9" stroke="currentColor" stroke-width="${sw}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`;
 }
@@ -308,7 +345,6 @@ function pairDaily(periods) {
   return out;
 }
 
-// ---------- Render ----------
 function renderLocationPicker() {
   const picker = document.getElementById('locationPicker');
   picker.innerHTML = LOCATIONS.map(l =>
@@ -320,16 +356,21 @@ function renderError(msg) {
   document.getElementById('content').innerHTML = `<div class="err">${msg}</div>`;
 }
 
-function renderWeather(daily, hourly, points) {
-  const cur = hourly.properties.periods[0];
-  const upcoming = hourly.properties.periods.slice(0, 6);
+function renderWeather(daily, hourly, meta) {
   const loc = LOCATIONS.find(l => l.id === STATE.active);
+
+  const nowMs = Date.now();
+  const validHourly = hourly.properties.periods.filter(p =>
+    new Date(p.endTime || p.startTime).getTime() > nowMs
+  );
+  const cur = validHourly[0] || hourly.properties.periods[0];
+  const upcoming = validHourly.slice(1, 7);
 
   const speed = parseWindSpeed(cur.windSpeed);
   const dir = cur.windDirection;
   const precip = cur.probabilityOfPrecipitation?.value ?? 0;
 
-  const condition = classifyCondition(cur.shortForecast, cur.isDaytime);
+  const condition = classifyCondition(cur.shortForecast, cur.isDaytime, precip);
   applyBackground(condition);
 
   const dailyPairs = pairDaily(daily.properties.periods);
@@ -339,7 +380,7 @@ function renderWeather(daily, hourly, points) {
   let html = '';
 
   if (loc.isLocal) {
-    const label = (points.city && points.state) ? `Local · ${points.city}, ${points.state}` : 'Local';
+    const label = (meta?.city && meta?.state) ? `Local · ${meta.city}, ${meta.state}` : 'Local';
     html += `<div class="location-label">${label}</div>`;
   } else if (!loc.default) {
     html += `<div class="location-label">${loc.full}</div>`;
@@ -350,12 +391,12 @@ function renderWeather(daily, hourly, points) {
       <div class="current-left">
         <div class="temp-line">
           <span class="temp">${Math.round(cur.temperature)}°</span>
-          <span class="cond-icon">${iconFor(cur.shortForecast, cur.isDaytime)}</span>
+          <span class="cond-icon">${iconFor(cur.shortForecast, cur.isDaytime, precip)}</span>
         </div>
         ${high != null && low != null ? `<div class="hilo"><span class="hi">${high}°</span> / ${low}°</div>` : ''}
       </div>
       <div class="current-right">
-        <div class="meta-line">${windArrow(dir, speed, 24)} ${speed ?? '–'} mph</div>
+        <div class="meta-line">${windArrow(dir, speed)} ${speed ?? '–'} mph</div>
         <div class="meta-line precip ${precip === 0 ? 'zero' : ''}">☔ ${precip}%</div>
       </div>
     </div>
@@ -369,10 +410,9 @@ function renderWeather(daily, hourly, points) {
       <div class="h-col">
         <div class="h-time">${formatHour(h.startTime)}</div>
         <div class="h-temp">${Math.round(h.temperature)}°</div>
-        <div class="h-icon">${iconFor(h.shortForecast, h.isDaytime)}</div>
-        <div class="h-wind">${windArrow(h.windDirection, sp, 24)}</div>
-        <div class="h-windspeed">${sp ?? '–'}</div>
-        <div class="h-precip ${pp === 0 ? 'zero' : ''}">${pp}%</div>
+        <div class="h-icon">${iconFor(h.shortForecast, h.isDaytime, pp)}</div>
+        <div class="h-wind">${windArrow(h.windDirection, sp)} <span class="h-windspeed">${sp ?? '–'}</span></div>
+        <div class="h-precip">${pp}%</div>
       </div>
     `;
   }
@@ -385,10 +425,10 @@ function renderWeather(daily, hourly, points) {
     html += `
       <div class="d-row">
         <span class="d-day">${formatDay(p.date)}</span>
-        <span class="d-icon">${iconFor(p.shortForecast, true)}</span>
+        <span class="d-icon">${iconFor(p.shortForecast, true, p.precip)}</span>
         <span class="d-range">${dHigh} / ${dLow}</span>
-        <span class="d-wind">${windArrow(p.windDirection, p.windSpeed, 20)}<span class="d-windspeed">${p.windSpeed ?? '–'}</span></span>
-        <span class="d-precip ${p.precip === 0 ? 'zero' : ''}">${p.precip > 0 ? p.precip + '%' : ''}</span>
+        <span class="d-wind">${windArrow(p.windDirection, p.windSpeed)}<span class="d-windspeed">${p.windSpeed ?? '–'}</span></span>
+        <span class="d-precip">${p.precip}%</span>
       </div>
     `;
   });
@@ -397,7 +437,6 @@ function renderWeather(daily, hourly, points) {
   document.getElementById('content').innerHTML = html;
 }
 
-// ---------- Load ----------
 let loading = false;
 async function load() {
   if (loading) return;
@@ -415,12 +454,10 @@ async function load() {
 
   try {
     const coords = await ensureCoords(loc);
-    const points = await fetchPoints(loc, coords);
-    const [daily, hourly] = await Promise.all([
-      fetchJSON(points.forecast),
-      fetchJSON(points.forecastHourly),
-    ]);
-    renderWeather(daily, hourly, points);
+    const data = STATE.source === 'openmeteo'
+      ? await fetchOpenMeteo(loc, coords)
+      : await fetchNOAA(loc, coords);
+    renderWeather(data.daily, data.hourly, { city: data.city, state: data.state });
     localStorage.setItem('wx-last-load', Date.now().toString());
   } catch (e) {
     console.error(e);

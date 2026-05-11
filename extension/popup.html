@@ -122,7 +122,7 @@ header {
   gap: 14px;
 }
 
-.current-left { min-width: 0; }
+.current-left { min-width: 0; display: inline-flex; flex-direction: column; align-items: center; }
 .temp-line { display: flex; align-items: center; gap: 12px; }
 
 .current .temp {
@@ -145,6 +145,8 @@ header {
   color: var(--muted);
   margin-top: 8px;
   font-feature-settings: "tnum";
+  text-align: center;
+  width: 100%;
 }
 .current .hilo .hi { color: var(--fg); font-weight: 500; }
 
@@ -168,13 +170,13 @@ header {
 .current-right .meta-line.precip { color: var(--rain); text-shadow: var(--rain-shadow); font-weight: 600; }
 .current-right .meta-line.precip.zero { color: var(--muted); opacity: 0.5; font-weight: 400; }
 
-/* Hourly — 6, no box */
+/* Hourly — 6, no box, tight gap */
 .hourly {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
+  gap: 2px;
   padding: 4px 0 8px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .h-col {
@@ -185,13 +187,20 @@ header {
   gap: 6px;
   font-feature-settings: "tnum";
 }
-.h-time { color: var(--muted); font-size: 13px; letter-spacing: 0.3px; }
-.h-temp { font-size: 17px; font-weight: 500; }
-.h-icon { font-size: 24px; line-height: 1; display: inline-flex; align-items: center; }
-.h-wind { display: flex; align-items: center; justify-content: center; height: 18px; }
-.h-windspeed { color: var(--muted); font-size: 12px; font-feature-settings: "tnum"; line-height: 1; }
-.h-precip { color: var(--rain); font-size: 12px; font-feature-settings: "tnum"; font-weight: 600; text-shadow: var(--rain-shadow); }
-.h-precip.zero { color: var(--muted); opacity: 0.4; font-weight: 400; text-shadow: var(--shadow); }
+.h-time { color: var(--muted); font-size: 15px; letter-spacing: 0.3px; }
+.h-temp { font-size: 18px; font-weight: 500; }
+.h-icon { font-size: 26px; line-height: 1; display: inline-flex; align-items: center; }
+.h-wind {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  font-feature-settings: "tnum";
+}
+.h-wind .wind-arrow { width: 24px; height: 13px; }
+.h-windspeed { font-feature-settings: "tnum"; }
+.h-precip { color: var(--rain); font-size: 13px; font-feature-settings: "tnum"; font-weight: 600; text-shadow: var(--rain-shadow); }
 
 /* Daily — 6 days, taller */
 .daily { font-size: 16px; font-feature-settings: "tnum"; }
@@ -200,7 +209,7 @@ header {
   grid-template-columns: 56px 30px 1fr 80px 50px;
   gap: 12px;
   align-items: center;
-  padding: 13px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
 .d-row:last-child { border-bottom: none; }
@@ -209,9 +218,9 @@ header {
 .d-range { color: var(--muted); font-size: 16px; }
 .d-range .high { color: var(--fg); font-weight: 500; }
 .d-wind { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; font-size: 14px; }
+.d-wind .wind-arrow { width: 20px; height: 11px; }
 .d-windspeed { font-feature-settings: "tnum"; }
 .d-precip { color: var(--rain); text-align: right; font-size: 13px; font-weight: 600; text-shadow: var(--rain-shadow); }
-.d-precip.zero { color: var(--muted); opacity: 0.4; font-weight: 400; text-shadow: var(--shadow); }
 
 .empty, .err {
   color: var(--muted);

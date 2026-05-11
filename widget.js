@@ -55,16 +55,27 @@ function parseSpeed(s) {
   return m[2] ? Math.round((+m[1] + +m[2]) / 2) : +m[1];
 }
 
-function iconFor(short, isDay) {
+function iconFor(short, isDay, precipPct) {
   const s = (short || '').toLowerCase();
-  if (s.includes('thunder')) return '⛈';
-  if (s.includes('snow') || s.includes('flurr')) return '❄';
-  if (s.includes('rain') || s.includes('shower') || s.includes('drizzle')) return '🌧';
-  if (s.includes('fog') || s.includes('mist') || s.includes('haze')) return '🌫';
-  if (s.includes('partly')) return isDay ? '⛅' : '☁';
-  if (s.includes('cloudy') || s.includes('overcast')) return '☁';
-  if (s.includes('mostly sunny') || s.includes('mostly clear')) return isDay ? '🌤' : '🌙';
-  if (s.includes('sunny') || s.includes('clear') || s.includes('fair')) return isDay ? '☀' : '🌙';
+  const chance = s.includes('chance');
+  const expected = precipPct != null && precipPct >= 30;
+  if (s.includes('thunder')) {
+    if (expected) return '⛈️';
+    return chance ? (isDay ? '⛅' : '☁️') : '⛈️';
+  }
+  if (s.includes('snow') || s.includes('flurr')) {
+    if (expected) return '❄️';
+    return chance ? (isDay ? '⛅' : '☁️') : '❄️';
+  }
+  if (s.includes('rain') || s.includes('shower') || s.includes('drizzle')) {
+    if (expected) return '🌧️';
+    return chance ? (isDay ? '⛅' : '☁️') : '🌧️';
+  }
+  if (s.includes('fog') || s.includes('mist') || s.includes('haze')) return '🌫️';
+  if (s.includes('partly')) return isDay ? '⛅' : '☁️';
+  if (s.includes('cloudy') || s.includes('overcast')) return '☁️';
+  if (s.includes('mostly sunny') || s.includes('mostly clear')) return isDay ? '🌤️' : '🌙';
+  if (s.includes('sunny') || s.includes('clear') || s.includes('fair')) return isDay ? '☀️' : '🌙';
   if (s.includes('wind')) return '💨';
   return '·';
 }
@@ -178,7 +189,12 @@ async function buildWidget() {
     return w;
   }
 
-  const cur = data.hourly.properties.periods[0];
+  // Filter out past hourly periods (NWS sometimes lags an hour or two).
+  const nowMs = Date.now();
+  const validHourly = data.hourly.properties.periods.filter(p =>
+    new Date(p.endTime || p.startTime).getTime() > nowMs
+  );
+  const cur = validHourly[0] || data.hourly.properties.periods[0];
   const condition = classify(cur.shortForecast, cur.isDaytime);
   w.backgroundGradient = gradientFor(condition);
 
@@ -205,18 +221,13 @@ async function buildWidget() {
   tempT.textColor = Color.white();
   tempT.lineLimit = 1;
   tempLine.addSpacer(6);
-  const condIcon = tempLine.addText(iconFor(cur.shortForecast, cur.isDaytime));
-  condIcon.font = Font.systemFont(20);
-
-  const condTxt = left.addText(cur.shortForecast);
-  condTxt.font = Font.regularSystemFont(11);
-  condTxt.textColor = new Color('#ffffff', 0.9);
-  condTxt.lineLimit = 1;
+  const condIcon = tempLine.addText(iconFor(cur.shortForecast, cur.isDaytime, precip));
+  condIcon.font = Font.systemFont(28);
 
   if (high != null && low != null) {
-    const hl = left.addText(`H ${high}°  L ${low}°`);
-    hl.font = Font.regularSystemFont(10);
-    hl.textColor = new Color('#ffffff', 0.7);
+    const hl = left.addText(`${high}° / ${low}°`);
+    hl.font = Font.regularSystemFont(13);
+    hl.textColor = new Color('#ffffff', 0.78);
   }
 
   top.addSpacer();
@@ -254,42 +265,43 @@ async function buildWidget() {
   const bottom = w.addStack();
   bottom.layoutHorizontally();
 
-  const hours = data.hourly.properties.periods.slice(1, 1 + HOURS_AHEAD);
+  const hours = validHourly.slice(1, 1 + HOURS_AHEAD);
 
   for (let i = 0; i < hours.length; i++) {
     const h = hours[i];
     const sp = parseSpeed(h.windSpeed);
+    const pp = h.probabilityOfPrecipitation?.value ?? 0;
 
     const col = bottom.addStack();
     col.layoutVertically();
     col.centerAlignContent();
 
     const time = col.addText(formatHour(h.startTime));
-    time.font = Font.systemFont(9);
+    time.font = Font.systemFont(11);
     time.textColor = new Color('#ffffff', 0.7);
     time.centerAlignText();
 
     const t = col.addText(`${Math.round(h.temperature)}°`);
-    t.font = Font.semiboldSystemFont(12);
+    t.font = Font.semiboldSystemFont(14);
     t.textColor = Color.white();
     t.centerAlignText();
 
-    const ic = col.addText(iconFor(h.shortForecast, h.isDaytime));
-    ic.font = Font.systemFont(12);
+    const ic = col.addText(iconFor(h.shortForecast, h.isDaytime, pp));
+    ic.font = Font.systemFont(15);
     ic.centerAlignText();
 
-    const arrow = windArrowImage(h.windDirection, sp, 14);
+    const arrow = windArrowImage(h.windDirection, sp, 16);
     if (arrow) {
       const ai = col.addImage(arrow);
-      ai.imageSize = new Size(14, 14);
+      ai.imageSize = new Size(16, 16);
       ai.centerAlignImage();
     } else {
       const blank = col.addText(' ');
-      blank.font = Font.systemFont(11);
+      blank.font = Font.systemFont(13);
     }
 
     const sw = col.addText(sp != null ? `${sp}` : '–');
-    sw.font = Font.systemFont(9);
+    sw.font = Font.systemFont(11);
     sw.textColor = new Color('#ffffff', 0.7);
     sw.centerAlignText();
 
